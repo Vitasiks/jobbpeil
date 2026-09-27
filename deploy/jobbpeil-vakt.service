@@ -1,0 +1,27 @@
+[Unit]
+Description=JobbPeil Vakt daily batch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/jobbpeil
+EnvironmentFile=/etc/jobbpeil/jobbpeil.env
+ExecStart=/home/ubuntu/jobbpeil/.venv/bin/python /home/ubuntu/jobbpeil/vakt_run_all.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

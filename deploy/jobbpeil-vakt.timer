@@ -1,0 +1,10 @@
+[Unit]
+Description=Run JobbPeil Vakt daily at 08:00 Europe/Oslo
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 Europe/Oslo
+Persistent=true
+Unit=jobbpeil-vakt.service
+
+[Install]
+WantedBy=timers.target

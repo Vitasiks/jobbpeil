@@ -1,0 +1,92 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment / secrets
+.env
+*.env
+
+# Production database
+nav_jobs.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache
+.jobbpeil_cache/
+*.cache
+
+# Logs
+*.log
+logs/
+
+# Backups
+*.backup*
+*.bak
+backup/
+backups/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Old development copies
+web_app_before_*.py
+web_app_broken_*.py
+web_appbekap.py
+
+# Local learning / temporary files
+tuple_demo.py
+unique_words.py
+user_data.json
+users_data.json
+
+# Runtime lock
+vakt_run_all.lock
+
+# Old app copies
+web_app2.py
+web_app_backup.py
+web_app_backup\ \(2\).py
+web_app_backup\ \(3\).py
+web_app_backup\ \(4\).py
+
+# Old learning files
+students.py
+
+# Old learning file
+numbers.py
+
+# Old standalone frontend prototype
+index.html
+script.js
+style.css
+
+# Old learning notes
+notes.py
+notes.txt
+
+# Generated NAV statistics snapshot
+nav_monthly_statistics.json
+
+# Generated active vacancy snapshot
+nav_active_jobs.json
+
+# Old learning file
+expenses.py
+
+# Old learning / API practice files
+main.py
+api_test.py

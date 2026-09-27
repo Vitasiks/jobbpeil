@@ -1,0 +1,30 @@
+[Unit]
+Description=JobbPeil production application
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/jobbpeil
+ExecStart=/home/ubuntu/jobbpeil/.venv/bin/python -B /home/ubuntu/jobbpeil/web_app.py
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/jobbpeil/jobbpeil.env
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
