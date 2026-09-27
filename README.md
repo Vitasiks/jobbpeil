@@ -1,42 +1,51 @@
+
 # JobbPeil
 
 **Finn din retning**
 
-JobbPeil is a Norwegian job-search and labour-market navigation platform built to help users not only find vacancies, but also understand where to move next.
+JobbPeil is a Norwegian job-search and labour-market navigation platform that helps users find real vacancies, explore possible directions, and receive relevant job alerts.
 
-Live site: https://jobbpeil.no
+**Live:** https://jobbpeil.no
 
-## Main features
+![JobbPeil overview](docs/screenshots/overview.png)
 
-- Search real job vacancies
-- Filter by profession
-- Filter by fylke
-- Filter by kommune
-- Guided Explore flow with 5 questions
-- Vacancy detail pages
-- Application/contact handling
-- JobbPeil Vakt email alerts
-- Email verification
-- Duplicate protection for alerts
-- Responsive UI
+## What JobbPeil does
 
-## Data sources
+- Search real vacancies from NAV / Arbeidsplassen
+- Filter by profession, fylke and kommune
+- Explore possible job directions through 5 short questions
+- Compare directions based on real vacancy data
+- Open detailed vacancy pages with application/contact handling
+- Subscribe to **JobbPeil Vakt** for relevant email alerts
+- Prevent duplicate alerts and repeated daily sends
+- Run as a real production service on an Ubuntu VPS
 
-Current source:
+## Product flow
 
-- NAV / Arbeidsplassen
+### Home
+![JobbPeil home](docs/screenshots/home.png)
 
-Planned:
+### Explore results
+The Explore flow analyses real vacancies and presents practical directions with counts, signals and regional opportunities.
 
-- SSB labour-market statistics
-- additional trusted Norwegian labour-market sources
+![JobbPeil Explore results](docs/screenshots/explore-results.png)
+
+### Vacancy search
+Users can search directly and filter by region or municipality.
+
+![JobbPeil vacancy search](docs/screenshots/jobs.png)
+
+### JobbPeil Vakt
+Users can subscribe to a profession and fylke and receive email alerts when new relevant vacancies appear.
+
+![JobbPeil Vakt](docs/screenshots/vakt.png)
 
 ## Tech stack
 
 - Python
 - SQLite
-- server-side rendered HTML
-- custom vacancy matching
+- Server-side rendered HTML
+- Custom vacancy matching
 - Ubuntu VPS
 - Nginx
 - systemd
@@ -46,20 +55,23 @@ Planned:
 
 ## JobbPeil Vakt
 
-JobbPeil Vakt automatically checks for new relevant vacancies.
-
-Current logic:
-
 - runs daily at 08:00 Europe/Oslo
-- only verified active subscriptions are processed
-- up to 4 vacancies per email
-- duplicate vacancies are not sent twice
-- maximum one alert email per day
-- no email is sent if there are no new relevant vacancies
+- processes only verified active subscriptions
+- sends up to 4 vacancies per email
+- does not resend the same vacancy
+- sends at most one alert email per subscription per day
+- sends nothing when there are no new relevant vacancies
 
-## Security
+## Data sources
 
-Production setup includes:
+Current source:
+- NAV / Arbeidsplassen
+
+Planned:
+- SSB labour-market statistics
+- additional trusted Norwegian labour-market sources
+
+## Security and production
 
 - SSH key authentication
 - password SSH login disabled
@@ -73,36 +85,13 @@ Production setup includes:
 
 ## Testing
 
-Automated tests cover:
-
-- vacancy search
-- pagination
-- filters
-- Explore
-- application/contact handling
-- Vakt verification
-- candidate matching
-- deduplication
-- daily send guard
-
-Current test suite:
+Automated tests cover vacancy search, pagination, filters, Explore, application/contact handling, Vakt verification, candidate matching, deduplication and daily send guard.
 
 **91 tests passing**
 
 ## My role
 
-I designed and built JobbPeil as an end-to-end project, including:
-
-- product concept
-- UX structure
-- backend development
-- vacancy search and filtering
-- matching logic
-- email alert system
-- production deployment
-- server configuration
-- analytics
-- testing and debugging
+I designed and built JobbPeil as an end-to-end project, including product concept, UX structure, backend development, vacancy search and filtering, matching logic, email alerts, production deployment, server configuration, analytics, testing and debugging.
 
 ## Status
 
