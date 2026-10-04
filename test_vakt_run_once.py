@@ -41,6 +41,7 @@ class VaktRunnerTests(unittest.TestCase):
         self.match = self.start_patch("vakt_run_once.get_vakt_candidates")
         self.send = self.start_patch("vakt_run_once.send_vakt_job_alert_email", return_value=True)
         self.mark = self.start_patch("vakt_run_once.mark_vakt_jobs_sent", return_value=2)
+        self.start_patch("web_app._vakt_status_email_due", return_value=True)
         self.candidates = [self.candidate("first"), self.candidate("second")]
         self.match.return_value = self.candidates
 
@@ -107,9 +108,9 @@ class VaktRunnerTests(unittest.TestCase):
         self.match.return_value = []
         status, output = self.invoke(["--subscription-id", "1"])
         self.assertEqual(status, 0)
-        self.assertIn("No new candidates.", output)
-        self.send.assert_not_called()
-        self.mark.assert_not_called()
+        self.assertIn('"email_mode": "REGIONAL_STATUS"', output)
+        self.send.assert_called_once()
+        self.mark.assert_called_once()
 
     def test_smtp_exception_does_not_mark(self):
         self.send.side_effect = RuntimeError("private-password-must-not-leak")
@@ -143,7 +144,7 @@ class VaktRunnerTests(unittest.TestCase):
         self.assertEqual(subscription["id"], 1)
         self.assertEqual(subscription["email"], "reader@example.test")
         self.assertEqual(subscription["unsubscribe_token"], "private-unsubscribe-1")
-        self.send.assert_called_once_with(subscription, self.candidates)
+        self.send.assert_called_once_with(subscription, self.candidates, email_mode="NEW_STRICT")
         self.mark.assert_called_once_with(1, ["first", "second"], database=self.database)
         for match_call in self.match.call_args_list:
             self.assertEqual(match_call.kwargs, {"limit": 4, "database": self.database})

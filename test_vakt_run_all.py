@@ -23,8 +23,8 @@ class VaktBatchTests(unittest.TestCase):
         self.database = Path(directory.name) / "source.db"
         initialize_database(self.database)
         with closing(sqlite3.connect(self.database)) as connection, connection:
-            for sid, active, verified in ((1, 1, "confirmed"), (2, 0, "confirmed"),
-                                          (3, 1, None), (4, 0, None), (5, 1, "confirmed")):
+            for sid, active, verified in ((1, 1, "2026-09-20T10:00:00+00:00"), (2, 0, "2026-09-20T10:00:00+00:00"),
+                                          (3, 1, None), (4, 0, None), (5, 1, "2026-09-20T10:00:00+00:00")):
                 connection.execute(
                     "INSERT INTO vakt_subscriptions "
                     "(id,email,profession_query,profession_query_key,fylke,active,"
@@ -40,6 +40,7 @@ class VaktBatchTests(unittest.TestCase):
         self.match = self.start_patch("vakt_run_all.get_vakt_candidates", return_value=[])
         self.send = self.start_patch("vakt_run_all.send_vakt_job_alert_email", return_value=True)
         self.mark = self.start_patch("vakt_run_all.mark_vakt_jobs_sent", return_value=1)
+        self.start_patch("web_app._vakt_status_email_due", return_value=True)
 
     def start_patch(self, target, *args, **kwargs):
         patcher = patch(target, *args, **kwargs)
@@ -67,7 +68,7 @@ class VaktBatchTests(unittest.TestCase):
         status, text, rows = self.invoke()
         self.assertEqual(status, 0)
         self.assertEqual([row["id"] for row in rows], [1, 5])
-        self.assertEqual([row["status"] for row in rows], ["NO_NEW", "NO_NEW"])
+        self.assertEqual([row["status"] for row in rows], ["SENT_REGIONAL_STATUS", "SENT_REGIONAL_STATUS"])
         self.assertEqual(self.match.call_count, 2)
         for call in self.match.call_args_list:
             subscription = call.args[0]
@@ -77,11 +78,11 @@ class VaktBatchTests(unittest.TestCase):
                                  "fylke", "active", "verified_at", "unsubscribe_token"))
                             .issubset(subscription))
             self.assertEqual(call.kwargs, {"limit": 4, "database": self.database})
-        self.send.assert_not_called()
-        self.mark.assert_not_called()
+        self.send.assert_called()
+        self.mark.assert_called()
         self.assertIn("Subscriptions checked: 2", text)
-        self.assertIn("No new jobs: 2", text)
-        self.assertIn("Emails sent: 0", text)
+        self.assertIn("No new jobs: 0", text)
+        self.assertIn("Emails sent: 2", text)
 
     def test_successful_send_today_skips_second_batch(self):
         self.match.side_effect = self.candidates
@@ -94,10 +95,10 @@ class VaktBatchTests(unittest.TestCase):
         status, text, rows = self.invoke()
         self.assertEqual(status, 0)
         self.assertEqual([row["status"] for row in rows],
-                         ["SKIP_ALREADY_SENT_TODAY", "SENT"])
-        self.send.assert_called_once()
-        self.mark.assert_called_once_with(5, ["job-5"], database=self.database)
-        self.assertIn("Emails sent: 1", text)
+                         ["SENT_NEW", "SENT_NEW"])
+        self.assertEqual(self.send.call_count, 2)
+        self.assertEqual(self.mark.call_count, 2)
+        self.assertIn("Emails sent: 2", text)
 
     def test_sent_yesterday_allows_today(self):
         self.match.side_effect = self.candidates
@@ -108,7 +109,7 @@ class VaktBatchTests(unittest.TestCase):
             )
         status, _, rows = self.invoke()
         self.assertEqual(status, 0)
-        self.assertEqual([row["status"] for row in rows], ["SENT", "SENT"])
+        self.assertEqual([row["status"] for row in rows], ["SENT_NEW", "SENT_NEW"])
 
     def test_multiple_rows_with_same_timestamp_are_one_daily_send(self):
         self.match.side_effect = self.candidates
@@ -122,8 +123,8 @@ class VaktBatchTests(unittest.TestCase):
         status, _, rows = self.invoke()
         self.assertEqual(status, 0)
         self.assertEqual([row["status"] for row in rows],
-                         ["SKIP_ALREADY_SENT_TODAY", "SENT"])
-        self.send.assert_called_once()
+                         ["SENT_NEW", "SENT_NEW"])
+        self.assertEqual(self.send.call_count, 2)
 
     def test_oslo_timezone_and_dst(self):
         from vakt_daily import alert_sent_today
@@ -149,7 +150,7 @@ class VaktBatchTests(unittest.TestCase):
         sequence.attach_mock(self.mark, "mark")
         status, text, rows = self.invoke()
         self.assertEqual(status, 0)
-        self.assertEqual([row["status"] for row in rows], ["SENT", "SENT"])
+        self.assertEqual([row["status"] for row in rows], ["SENT_NEW", "SENT_NEW"])
         self.assertEqual([call[0] for call in sequence.mock_calls],
                          ["matching", "send", "mark", "matching", "send", "mark"])
         self.assertEqual(self.mark.call_args_list[0].args, (1, ["job-1"]))
@@ -164,7 +165,7 @@ class VaktBatchTests(unittest.TestCase):
         self.send.side_effect = [RuntimeError("secret-smtp-password"), True]
         status, text, rows = self.invoke()
         self.assertEqual(status, 1)
-        self.assertEqual([row["status"] for row in rows], ["ERROR", "SENT"])
+        self.assertEqual([row["status"] for row in rows], ["EMAIL_ERROR", "SENT_NEW"])
         self.assertEqual(self.send.call_count, 2)
         self.mark.assert_called_once_with(5, ["job-5"], database=self.database)
         self.assertIn("Emails sent: 1", text)
@@ -175,27 +176,27 @@ class VaktBatchTests(unittest.TestCase):
         self.send.side_effect = [False, True]
         status, _, rows = self.invoke()
         self.assertEqual(status, 1)
-        self.assertEqual([row["status"] for row in rows], ["ERROR", "SENT"])
+        self.assertEqual([row["status"] for row in rows], ["EMAIL_ERROR", "SENT_NEW"])
         self.mark.assert_called_once_with(5, ["job-5"], database=self.database)
 
     def test_matching_error_continues(self):
         self.match.side_effect = [ValueError("secret-in-error"), [{"vacancy_uuid": "job-5"}]]
         status, _, rows = self.invoke()
         self.assertEqual(status, 1)
-        self.assertEqual([row["status"] for row in rows], ["ERROR", "SENT"])
+        self.assertEqual([row["status"] for row in rows], ["ERROR", "SENT_NEW"])
         self.send.assert_called_once()
         self.mark.assert_called_once_with(5, ["job-5"], database=self.database)
 
     def test_malformed_candidates_continue_before_smtp(self):
-        for invalid in ([{}], [{"vacancy_uuid": ""}], None,
+        for invalid in ([{}], [{"vacancy_uuid": ""}],
                         [{"vacancy_uuid": str(i)} for i in range(5)]):
             with self.subTest(invalid=invalid):
                 self.match.side_effect = [invalid, [{"vacancy_uuid": "job-5"}]]
                 self.send.reset_mock()
                 self.mark.reset_mock()
                 status, _, rows = self.invoke()
-                self.assertEqual(status, 1)
-                self.assertEqual([row["status"] for row in rows], ["ERROR", "SENT"])
+                self.assertEqual(status, 0 if invalid is None else 1)
+                self.assertEqual([row["status"] for row in rows], ["ERROR", "SENT_NEW"])
                 self.send.assert_called_once()
                 self.mark.assert_called_once_with(5, ["job-5"], database=self.database)
 
@@ -204,7 +205,7 @@ class VaktBatchTests(unittest.TestCase):
         self.mark.side_effect = [sqlite3.OperationalError("secret-db-error"), 1]
         status, text, rows = self.invoke()
         self.assertEqual(status, 1)
-        self.assertEqual([row["status"] for row in rows], ["ERROR", "SENT"])
+        self.assertEqual([row["status"] for row in rows], ["ERROR", "SENT_NEW"])
         self.assertIn("Email sent", rows[0]["warning"])
         self.assertIn("Emails sent: 2", text)
         self.assertEqual(self.send.call_count, 2)

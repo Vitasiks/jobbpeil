@@ -8,13 +8,15 @@ from pathlib import Path
 import sqlite3
 
 from vakt_run_once import dry_run_database, read_connection
+from nav_database import initialize_database
 from web_app import (
     DATABASE,
     get_vakt_candidates,
+    vakt_delivery_plan,
     mark_vakt_jobs_sent,
     send_vakt_job_alert_email,
+    update_vakt_communication,
 )
-from vakt_daily import alert_sent_today
 
 
 class BatchAlreadyRunning(Exception):
@@ -56,11 +58,13 @@ def batch_lock(path):
 
 
 def active_subscriptions(database):
+    initialize_database(database)
     with closing(read_connection(database)) as connection:
         connection.row_factory = sqlite3.Row
         return [dict(row) for row in connection.execute(
             "SELECT id, email, profession_query, profession_query_key, fylke, "
-            "active, verified_at, unsubscribe_token FROM vakt_subscriptions "
+            "active, verified_at, unsubscribe_token, last_vakt_email_at, "
+            "last_status_email_at FROM vakt_subscriptions "
             "WHERE active=1 AND verified_at IS NOT NULL ORDER BY id"
         )]
 
@@ -71,42 +75,56 @@ def run_batch(database, dry_run=False):
         checked += 1
         result = {key: subscription[key] for key in ("id", "profession_query", "fylke")}
         result["candidates_count"] = None
+        result["sent_count"] = 0
         phase = "matching"
         try:
-            if alert_sent_today(subscription["id"], database):
-                already_sent += 1
-                result["status"] = "SKIP_ALREADY_SENT_TODAY"
-                print(json.dumps(result, ensure_ascii=False), flush=True)
-                continue
-            candidates = get_vakt_candidates(subscription, limit=4, database=database)
-            if not isinstance(candidates, list) or len(candidates) > 4:
+            candidates_snapshot = get_vakt_candidates(subscription, limit=4, database=database)
+            plan = vakt_delivery_plan(subscription, database=database,
+                                      candidates_override=candidates_snapshot)
+            mode = plan["mode"]
+            candidates = plan["strict"] or plan["fallback"] or plan["regional"]
+            if not isinstance(candidates, list) or len(candidates) > (3 if mode == "REGIONAL_STATUS" else 4):
                 raise ValueError("Invalid candidate list")
             result["candidates_count"] = len(candidates)
-            if not candidates:
-                no_new += 1
+            result["strict_count"] = len(plan["strict"])
+            result["fallback_count"] = len(plan["fallback"])
+            result["regional_count"] = len(plan["regional"])
+            result["email_mode"] = mode
+            if mode == "INACTIVE":
                 result["status"] = "NO_NEW"
+            elif mode == "NO_NEW_SKIPPED_RECENT_STATUS":
+                no_new += 1
+                result["status"] = mode
+                result["reason"] = "NO_NEW_NO_UNSEEN_REGIONAL"
             else:
                 phase = "candidate validation"
                 uuids = [candidate["vacancy_uuid"] for candidate in candidates]
                 if any(not isinstance(uuid, str) or not uuid.strip() for uuid in uuids):
                     raise ValueError("Invalid candidate UUID")
                 if dry_run:
-                    # A preview must not be reported as SENT.
                     result["status"] = "DRY_RUN"
                 else:
                     phase = "SMTP"
-                    if send_vakt_job_alert_email(subscription, candidates) is not True:
+                    if send_vakt_job_alert_email(subscription, candidates, email_mode=mode) is not True:
                         raise RuntimeError("Sending not confirmed")
                     sent += 1
-                    phase = "recording sent vacancies"
-                    mark_vakt_jobs_sent(subscription["id"], uuids, database=database)
-                    result["status"] = "SENT"
+                    phase = "recording communication"
+                    if uuids:
+                        mark_vakt_jobs_sent(subscription["id"], uuids, database=database)
+                    result["sent_count"] = len(uuids)
+                    update_vakt_communication(subscription["id"], mode, database=database)
+                    result["status"] = {
+                        "NEW_STRICT": "SENT_NEW",
+                        "FALLBACK": "SENT_FALLBACK",
+                        "REGIONAL_STATUS": "SENT_REGIONAL_STATUS",
+                        "HEARTBEAT": "SENT_HEARTBEAT",
+                    }[mode]
         except Exception as error:
             errors += 1
-            result["status"] = "ERROR"
+            result["status"] = "EMAIL_ERROR" if phase == "SMTP" else "ERROR"
             # Never log exception messages: they may contain credentials/tokens.
             result["error"] = f"{phase}: {type(error).__name__}"
-            if phase == "recording sent vacancies":
+            if phase == "recording communication":
                 result["warning"] = "Email sent; check sent records before retrying."
         print(json.dumps(result, ensure_ascii=False), flush=True)
     print(f"Subscriptions checked: {checked}")

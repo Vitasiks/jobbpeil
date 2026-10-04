@@ -209,6 +209,18 @@ def initialize_database(path=DATABASE_PATH):
                 (expires_at,),
             )
             connection.commit()
+        vakt_columns = {row[1] for row in connection.execute("PRAGMA table_info(vakt_subscriptions)")}
+        missing_vakt_timestamps = {
+            "last_vakt_email_at",
+            "last_status_email_at",
+        } - vakt_columns
+        if missing_vakt_timestamps:
+            connection.execute("BEGIN IMMEDIATE")
+            for column in sorted(missing_vakt_timestamps):
+                connection.execute(
+                    f"ALTER TABLE vakt_subscriptions ADD COLUMN {column} TEXT"
+                )
+            connection.commit()
         if connection.execute("PRAGMA foreign_key_check").fetchall():
             raise sqlite3.IntegrityError("Нарушены внешние ключи базы.")
     except Exception:

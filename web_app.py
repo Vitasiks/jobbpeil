@@ -12,6 +12,7 @@ import tempfile
 from copy import deepcopy
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from functools import lru_cache
 from html import escape
 from html.parser import HTMLParser
@@ -184,9 +185,29 @@ document.querySelectorAll('[data-jobs-tip]').forEach(row => row.addEventListener
     document.querySelector('.all-jobs-filter')?.scrollIntoView({behavior: 'smooth', block: 'center'});
     search.focus({preventScroll: true});
   }
-}));"""
+}));
+const homeSearchCta = document.querySelector('.home .scenario-choices > a:first-child');
+if (homeSearchCta) {
+    const desktopHref = homeSearchCta.getAttribute('href');
+    const mobileViewport = window.matchMedia('(max-width: 700px)');
+    const updateHomeSearchCta = () => {
+        homeSearchCta.setAttribute('href', mobileViewport.matches ? '/?mode=jobs' : desktopHref);
+    };
+    updateHomeSearchCta();
+    mobileViewport.addEventListener('change', updateHomeSearchCta);
+}
+const homeSearchInput = document.querySelector('.home #profession[data-mobile-placeholder]');
+if (homeSearchInput) {
+    const desktopPlaceholder = homeSearchInput.getAttribute('placeholder');
+    const mobileSearchViewport = window.matchMedia('(max-width: 700px)');
+    const updateHomeSearchPlaceholder = () => {
+        homeSearchInput.setAttribute('placeholder', mobileSearchViewport.matches
+            ? homeSearchInput.dataset.mobilePlaceholder : desktopPlaceholder);
+    };
+    updateHomeSearchPlaceholder();
+    mobileSearchViewport.addEventListener('change', updateHomeSearchPlaceholder);
+}"""
 SCRIPT_HASH = base64.b64encode(hashlib.sha256(SCRIPT.encode('utf-8')).digest()).decode('ascii')
-
 
 BRAND = '''<span class="peil-mark" aria-hidden="true"><svg viewBox="0 0 40 40" width="34" height="34" fill="none"><path d="M10 31V10h10a8 8 0 0 1 0 16H10" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path class="peil-arrow" d="M20 22L33 9M25 9h8v8" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>JobbPeil</span>'''
 
@@ -2203,9 +2224,10 @@ def send_vakt_confirmation_email(email, verification_token, profession_query="",
     _send_vakt_email_message(message, config)
 
 
-def send_vakt_job_alert_email(subscription, candidates):
-    candidates = list(candidates or [])[:4]
-    if not candidates:
+def send_vakt_job_alert_email(subscription, candidates, email_mode="NEW_STRICT"):
+    max_candidates = 3 if email_mode == "REGIONAL_STATUS" else 4
+    candidates = list(candidates or [])[:max_candidates]
+    if not candidates and email_mode != "HEARTBEAT":
         return False
 
     config = _vakt_mail_config()
@@ -2215,14 +2237,39 @@ def send_vakt_job_alert_email(subscription, candidates):
         "?mode=vakt_unsubscribe&token="
         + quote(subscription["unsubscribe_token"], safe=""),
     )
+    search_url = urljoin(base_url, internal_url(
+        {}, q=subscription["profession_query"], fylke=subscription["fylke"]
+    ))
+    if email_mode == "FALLBACK":
+        title = "JobbPeil Vakt følger fortsatt med"
+        intro = (f'Vi fant ingen nye stillinger som matcher «{subscription["profession_query"]}» '
+                 f'i {subscription["fylke"]} siden sist.\n\n'
+                 "Men det finnes fortsatt aktuelle stillinger som kan være relevante for deg.")
+        cta_label = "Se aktuelle stillinger"
+    elif email_mode == "REGIONAL_STATUS":
+        title = "JobbPeil Vakt følger fortsatt med"
+        intro = (f'Vi fant ingen nye stillinger som matcher «{subscription["profession_query"]}» '
+                 f'i {subscription["fylke"]} akkurat nå.\n\n'
+                 f'Her er noen andre aktuelle stillinger i {subscription["fylke"]}:')
+        cta_label = f'Se aktuelle stillinger i {subscription["fylke"]}'
+    elif email_mode == "HEARTBEAT":
+        title = "JobbPeil Vakt følger fortsatt med"
+        intro = (f'Vi har ikke funnet nye stillinger som matcher «{subscription["profession_query"]}» '
+                 f'i {subscription["fylke"]} akkurat nå.\n\n'
+                 "Vi følger fortsatt med og sender deg beskjed så snart vi finner noe nytt.")
+        cta_label = f'Se aktuelle stillinger i {subscription["fylke"]}'
+    else:
+        title = "Nye jobbmuligheter"
+        intro = "Vi fant nye stillinger som kan passe med det du følger."
+        cta_label = None
     lines = [
         "JobbPeil Vakt",
         "",
-        "Nye jobbmuligheter",
+        title,
         "",
         "Hei!",
         "",
-        "Vi fant nye stillinger som kan passe med det du følger.",
+        intro,
         "",
         "Yrke: " + subscription["profession_query"],
         "Område: " + subscription["fylke"],
@@ -2264,6 +2311,8 @@ def send_vakt_job_alert_email(subscription, candidates):
         card.append(_vakt_email_button("Se stillingen", absolute_detail_url))
         cards.append('<div style="margin:18px 0;padding:20px;border:1px solid #d7e3e2;'
                      'border-radius:12px;background-color:#ffffff;">' + ''.join(card) + '</div>')
+    if cta_label:
+        lines.extend((cta_label, search_url, ""))
     why = ("Du får denne e-posten fordi JobbPeil Vakt følger "
            f'{subscription["profession_query"]} i {subscription["fylke"]} for deg.')
     lines.extend((
@@ -2281,15 +2330,19 @@ def send_vakt_job_alert_email(subscription, candidates):
     message["From"] = "JobbPeil <" + config["JOBBPEIL_MAIL_FROM"] + ">"
     message["To"] = subscription["email"]
     message["Reply-To"] = config["JOBBPEIL_MAIL_FROM"]
-    count = len(candidates)
-    jobs_label = "ny jobb" if count == 1 else "nye jobber"
-    message["Subject"] = (f'{count} {jobs_label} for {subscription["profession_query"]} '
-                          f'i {subscription["fylke"]}')
+    if email_mode == "NEW_STRICT":
+        count = len(candidates)
+        jobs_label = "ny jobb" if count == 1 else "nye jobber"
+        message["Subject"] = (f'{count} {jobs_label} for {subscription["profession_query"]} '
+                              f'i {subscription["fylke"]}')
+    else:
+        message["Subject"] = title
     message.set_content("\n".join(lines), charset="utf-8")
     content = (
-        '<p>Vi fant nye stillinger som kan passe med det du følger.</p>'
+        f'<p>{e(intro).replace(chr(10), "<br>")}</p>'
         + _vakt_email_following(subscription["profession_query"], subscription["fylke"])
         + ''.join(cards)
+        + (_vakt_email_button(cta_label, search_url) if cta_label else '')
         + '<div style="margin:24px 0;padding:18px 20px;background-color:#edf6f1;'
         + f'border-radius:12px;color:#587571;font-size:14px;"><p>{e(why)}</p>'
         + f'<p><a href="{e(unsubscribe_url)}" style="color:#087a61;text-decoration:underline;">'
@@ -2428,7 +2481,282 @@ def mark_vakt_jobs_sent(subscription_id, vacancy_uuids, sent_at=None, database=D
         connection.close()
 
 
-def get_vakt_candidates(subscription, limit=4, database=DATABASE):
+def _vakt_verified_at(subscription, database=DATABASE):
+    subscription_id = subscription.get("id") if isinstance(subscription, dict) else None
+    if not isinstance(subscription_id, int) or isinstance(subscription_id, bool):
+        return None
+    initialize_database(database)
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT verified_at FROM vakt_subscriptions WHERE id=? AND active=1 "
+            "AND verified_at IS NOT NULL", (subscription_id,)
+        ).fetchone()
+    try:
+        value = datetime.fromisoformat(row[0]) if row else None
+        if value is None or value.tzinfo is None or value.utcoffset() is None:
+            return None
+        return value.astimezone(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _vakt_sent_uuids(subscription, database=DATABASE):
+    subscription_id = subscription.get("id") if isinstance(subscription, dict) else None
+    if not isinstance(subscription_id, int) or isinstance(subscription_id, bool):
+        return set()
+    initialize_database(database)
+    with sqlite3.connect(database) as connection:
+        return {row[0] for row in connection.execute(
+            "SELECT vacancy_uuid FROM vakt_sent_jobs WHERE subscription_id=?",
+            (subscription_id,),
+        )}
+
+
+def _vakt_regional_candidates(subscription, limit=3, database=DATABASE):
+    verified_at = _vakt_verified_at(subscription, database)
+    if verified_at is None:
+        return []
+    county = subscription.get("fylke", "")
+    sent_uuids = _vakt_sent_uuids(subscription, database)
+    source_version = active_jobs_source_version()
+    jobs = cached_active_jobs(source_version)
+    published_dates = cached_active_published_dates(source_version)
+    ranked = []
+    for vacancy_uuid, ad in jobs.items():
+        if (not isinstance(ad, dict) or ad.get("status") != "ACTIVE"
+                or vacancy_uuid in sent_uuids):
+            continue
+        locations = [
+            location for location in ad.get("workLocations") or ()
+            if isinstance(location, dict)
+            and vakt_text_key(location.get("county") or "") == vakt_text_key(county)
+        ]
+        published_at = published_dates.get(vacancy_uuid)
+        if not locations or not isinstance(published_at, int) or isinstance(published_at, bool):
+            continue
+        try:
+            published_utc = EPOCH + timedelta(microseconds=published_at)
+        except (ValueError, OverflowError):
+            continue
+        ranked.append((published_at, vacancy_uuid, ad, locations, published_utc))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [{
+        "vacancy_uuid": vacancy_uuid,
+        "title": ad.get("title") or ad.get("jobtitle") or "Uten tittel",
+        "employer": (ad.get("employer") or {}).get("name"),
+        "fylke": county,
+        "locations": locations,
+        "published_at": published_at,
+        "published_date": format_published_short(published_at),
+        "detail_url": internal_url({}, q=subscription.get("profession_query", ""),
+                                   fylke=county, job=vacancy_uuid),
+    } for published_at, vacancy_uuid, ad, locations, _ in ranked[:min(limit, 3)]]
+
+
+def vakt_delivery_plan(subscription, database=DATABASE, now=None, candidates_override=None):
+    """Choose a send mode without sending mail or mutating sent/state tables."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    now = now.astimezone(timezone.utc)
+    if not isinstance(subscription, dict) or subscription.get("active") != 1:
+        return {"mode": "INACTIVE", "strict": [], "fallback": [], "regional": []}
+    if candidates_override is None and _vakt_verified_at(subscription, database) is None:
+        return {"mode": "INACTIVE", "strict": [], "fallback": [], "regional": []}
+    if candidates_override is None:
+        strict, fallback = get_vakt_candidate_sets(subscription, limit=4, database=database)
+    elif candidates_override:
+        mode = getattr(candidates_override, "vakt_mode", "NEW_STRICT")
+        strict = list(candidates_override) if mode == "NEW_STRICT" else []
+        fallback = list(candidates_override) if mode == "FALLBACK" else []
+    else:
+        strict, fallback = [], []
+    if strict:
+        return {"mode": "NEW_STRICT", "strict": strict, "fallback": [], "regional": []}
+    # No new jobs: any status email (fallback/regional/heartbeat) is rate-limited.
+    if not _vakt_status_email_due(subscription, now, database):
+        return {"mode": "NO_NEW_SKIPPED_RECENT_STATUS", "strict": [], "fallback": [], "regional": []}
+    if fallback:
+        return {"mode": "FALLBACK", "strict": [], "fallback": fallback, "regional": []}
+    regional = _vakt_regional_candidates(subscription, limit=3, database=database)
+    if regional:
+        return {"mode": "REGIONAL_STATUS", "strict": [], "fallback": [], "regional": regional}
+    return {"mode": "HEARTBEAT", "strict": [], "fallback": [], "regional": []}
+
+
+def _vakt_status_email_due(subscription, now, database=DATABASE):
+    """Per-subscription: Mon-Fri (Oslo) and >=7 calendar days since last status email."""
+    oslo = ZoneInfo("Europe/Oslo")
+    oslo_now = now.astimezone(oslo)
+    if oslo_now.weekday() >= 5:
+        return False
+    subscription_id = subscription.get("id")
+    last_status = subscription.get("last_status_email_at")
+    if isinstance(subscription_id, int) and not isinstance(subscription_id, bool):
+        initialize_database(database)
+        with sqlite3.connect(database) as connection:
+            row = connection.execute(
+                "SELECT last_status_email_at FROM vakt_subscriptions WHERE id=?",
+                (subscription_id,),
+            ).fetchone()
+        if row:
+            last_status = row[0]
+    try:
+        last_at = datetime.fromisoformat(last_status) if last_status else None
+        if last_at is None or last_at.tzinfo is None or last_at.utcoffset() is None:
+            return True
+        last_date = last_at.astimezone(oslo).date()
+    except (TypeError, ValueError, OverflowError):
+        return True
+    return (oslo_now.date() - last_date).days >= 7
+
+
+def update_vakt_communication(subscription_id, mode, sent_at=None, database=DATABASE):
+    """Persist communication timestamps only after the caller confirms SMTP success."""
+    if mode not in {"NEW_STRICT", "FALLBACK", "REGIONAL_STATUS", "HEARTBEAT"}:
+        raise ValueError("invalid Vakt communication mode")
+    sent_at = sent_at or datetime.now(timezone.utc).isoformat()
+    initialize_database(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "UPDATE vakt_subscriptions SET last_vakt_email_at=?, "
+            "last_status_email_at=CASE WHEN ? IN ('FALLBACK','REGIONAL_STATUS','HEARTBEAT') "
+            "THEN ? ELSE last_status_email_at END WHERE id=?",
+            (sent_at, mode, sent_at, subscription_id),
+        )
+        connection.commit()
+
+
+VAKT_FALLBACK_STOPWORDS = frozenset({
+    "og", "eller", "med", "jobbe", "jobb", "som", "på", "i", "til", "for", "av",
+    "en", "et", "den", "det", "å", "the", "and", "or", "with", "in", "at", "to",
+})
+VAKT_FALLBACK_GENERIC_TERMS = frozenset({"assistent"})
+
+
+def normalize_vakt_fallback_terms(profession):
+    """Extract distinct, meaningful terms without stemming or transliteration."""
+    if not isinstance(profession, str):
+        return ()
+    terms = []
+    for term in re.findall(r"[^\W_]+", profession.casefold(), flags=re.UNICODE):
+        if len(term) < 3 or term in VAKT_FALLBACK_STOPWORDS or term in terms:
+            continue
+        terms.append(term)
+    return tuple(terms)
+
+
+def _vakt_fallback_words(value, strip_html=False):
+    if not isinstance(value, str) or not value:
+        return ()
+    if strip_html:
+        from html import unescape
+        value = unescape(re.sub(r"<[^>]*>", " ", value))
+    return tuple(re.findall(r"[^\W_]+", value.casefold(), flags=re.UNICODE))
+
+
+def _vakt_fallback_relevance(ad, terms):
+    title_fields = [_vakt_fallback_words(ad.get(key)) for key in ("title", "jobtitle")]
+    title_words = [word for words in title_fields for word in words]
+    title_set = set(title_words)
+    title_hits = [term for term in terms
+                  if term in title_set and term not in VAKT_FALLBACK_GENERIC_TERMS]
+    if title_hits:
+        contiguous_match = any(
+            words[index:index + len(terms)] == list(terms)
+            for words in title_fields
+            for index in range(max(0, len(words) - len(terms) + 1))
+        )
+        title_score = 100 if contiguous_match else min(92, 60 + 15 * (len(title_hits) - 1))
+    else:
+        title_score = 0
+
+    category_values = []
+    for category in ad.get("occupationCategories") or ():
+        if isinstance(category, dict):
+            category_values.extend(category.get(key) for key in ("level1", "level2"))
+    for category in ad.get("categoryList") or ():
+        if isinstance(category, dict):
+            category_values.extend(category.get(key) for key in ("name", "description"))
+    category_words = {word for value in category_values for word in _vakt_fallback_words(value)}
+    category_hits = [term for term in terms
+                     if term in category_words and term not in VAKT_FALLBACK_GENERIC_TERMS]
+    category_score = min(58, 42 + 8 * (len(category_hits) - 1)) if category_hits else 0
+
+    description_words = set(_vakt_fallback_words(ad.get("description"), strip_html=True))
+    description_hits = [term for term in terms
+                        if term in description_words and term not in VAKT_FALLBACK_GENERIC_TERMS]
+    # A lone term buried in description is weak evidence; require two distinct terms.
+    description_score = (30 + min(3 * (len(description_hits) - 2), 9)
+                         if len(description_hits) >= 2 else 0)
+
+    score = max(title_score, category_score, description_score)
+    if score < 30:
+        return 0, {}
+    reasons = {}
+    if title_hits:
+        reasons.update({f"title:{term}": title_score for term in title_hits})
+    if category_hits:
+        reasons.update({f"category:{term}": category_score for term in category_hits})
+    if description_hits:
+        reasons.update({f"description:{term}": description_score for term in description_hits})
+    return score, reasons
+
+
+def _vakt_fallback_candidates(profession, county, verified_at, sent_uuids, limit, jobs, published_dates):
+    terms = normalize_vakt_fallback_terms(profession)
+    if not terms:
+        return []
+    county_key = vakt_text_key(county)
+    ranked = []
+    for vacancy_uuid, ad in jobs.items():
+        if not isinstance(ad, dict) or ad.get("status") != "ACTIVE" or vacancy_uuid in sent_uuids:
+            continue
+        locations = [
+            location for location in ad.get("workLocations") or ()
+            if isinstance(location, dict) and vakt_text_key(location.get("county") or "") == county_key
+        ]
+        if not locations:
+            continue
+        published_at = published_dates.get(vacancy_uuid)
+        if not isinstance(published_at, int) or isinstance(published_at, bool):
+            continue
+        try:
+            published_utc = EPOCH + timedelta(microseconds=published_at)
+        except (ValueError, OverflowError):
+            continue
+        if published_utc < verified_at:
+            continue
+        score, reasons = _vakt_fallback_relevance(ad, terms)
+        if not score:
+            continue
+        ranked.append((score, published_at, vacancy_uuid, ad, locations, reasons))
+
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    candidates = []
+    for score, published_at, vacancy_uuid, ad, locations, reasons in ranked[:min(limit, 4)]:
+        candidates.append({
+            "vacancy_uuid": vacancy_uuid,
+            "title": ad.get("title") or ad.get("jobtitle") or "Uten tittel",
+            "employer": (ad.get("employer") or {}).get("name"),
+            "fylke": county,
+            "locations": locations,
+            "published_at": published_at,
+            "published_date": format_published_short(published_at),
+            "relevance": {"score": score, "reasons": reasons},
+            "detail_url": internal_url({}, q=profession, fylke=county, job=vacancy_uuid),
+        })
+    return candidates
+
+
+class VaktCandidateList(list):
+    def __init__(self, values=(), mode="NEW_STRICT"):
+        super().__init__(values)
+        self.vakt_mode = mode
+
+
+def _get_vakt_strict_candidates(subscription, limit=4, database=DATABASE):
     """Return unsent, ranked vacancies published at or after subscription activation.
 
     Candidates are not marked sent here: callers must call ``mark_vakt_jobs_sent``
@@ -2513,6 +2841,40 @@ def get_vakt_candidates(subscription, limit=4, database=DATABASE):
         if len(candidates) >= limit:
             break
     return candidates
+
+
+def get_vakt_candidate_sets(subscription, limit=4, database=DATABASE):
+    """Return strict and fallback candidates without changing Phase 1 rules."""
+    strict = _get_vakt_strict_candidates(subscription, limit=limit, database=database)
+    if strict:
+        return strict, []
+    verified_at = _vakt_verified_at(subscription, database)
+    if verified_at is None:
+        return [], []
+    profession = subscription.get("profession_query")
+    county = subscription.get("fylke")
+    if not profession or not county:
+        with sqlite3.connect(database) as connection:
+            row = connection.execute(
+                "SELECT profession_query, fylke FROM vakt_subscriptions WHERE id=?",
+                (subscription.get("id"),),
+            ).fetchone()
+        if row:
+            profession, county = row
+    source_version = active_jobs_source_version()
+    fallback = _vakt_fallback_candidates(
+        profession or "", county or "",
+        verified_at, _vakt_sent_uuids(subscription, database), limit,
+        cached_active_jobs(source_version), cached_active_published_dates(source_version),
+    )
+    return [], fallback
+
+
+def get_vakt_candidates(subscription, limit=4, database=DATABASE):
+    strict, fallback = get_vakt_candidate_sets(subscription, limit=limit, database=database)
+    if strict:
+        return VaktCandidateList(strict, "NEW_STRICT")
+    return VaktCandidateList(fallback, "FALLBACK")
 
 
 def vakt_header(params, lang):
@@ -3032,10 +3394,66 @@ VACANCY_LIST_STYLE += """
 """
 
 HOME_STYLE += ".home header .home-vakt-promo{background:#E6F3FA;border-color:#C7E1EE}.home-vakt-robot{background:#D8F1E7}"
+HOME_STYLE += "@media(max-width:700px){.home header .home-vakt-promo{right:84px}}"
 
 HOME_STYLE += """.home .search{position:relative;padding-left:44px}.home .search-icon{position:absolute;left:15px;top:50%;display:block;margin:0;transform:translateY(-50%)}@media(max-width:850px){.home .search-icon{display:block}}"""
 
 HOME_STYLE += """@media(max-width:600px){.home header .home-vakt-promo{display:grid}.home .home-vakt-copy{display:none}.home .hero{padding:18px 18px 12px;gap:14px}.home .hero-brand{font-size:48px}.home .hero .hero-tagline{font-size:30px;line-height:1.15;margin:8px 0 6px}.home .hero .intro{font-size:15px;line-height:1.4;margin:0}.home .hero-signpost{height:220px;margin:-2px auto -12px;align-self:end;object-position:center bottom}.home .scenario-choices{gap:10px;margin-top:-2px}.home .scenario-choices a{padding:17px;gap:10px}.home .scenario-choices strong{font-size:18px}}"""
+HOME_STYLE += """
+.home .choice-copy-mobile,.home .choice-title-mobile{display:none}
+@media(max-width:700px){
+.home .scenario-choices{position:relative;z-index:3;grid-column:1;grid-row:2;gap:10px;margin:0}
+.home .scenario-choices a{grid-template-columns:48px minmax(0,1fr) 22px;grid-template-rows:auto auto;align-items:center;gap:3px 10px;min-width:0;min-height:88px;padding:12px 14px;border-radius:20px;backdrop-filter:none;box-shadow:0 3px 12px #173d3a10}
+.home .scenario-choices a:first-child{background:linear-gradient(135deg,#f4fff9,#e5f6ee);border-color:#d6eee2}
+.home .scenario-choices a:last-child{background:linear-gradient(135deg,#f4fbff,#e8f5fb);border-color:#d7ebf4}
+.home .scenario-choices .choice-icon{grid-column:1;grid-row:1/3;width:48px;height:48px;margin:0;border-radius:50%}
+.home .scenario-choices a:first-child .choice-icon{background:#cceee1;color:#176b58}
+.home .scenario-choices a:last-child .choice-icon{background:#d9effa;color:#24789d}
+.home .scenario-choices .choice-title{display:none}
+.home .scenario-choices .choice-title-mobile{display:block;grid-column:2;grid-row:1;align-self:end;min-width:0;margin:0;font-size:17px;line-height:1.2;letter-spacing:0}
+.home .scenario-choices .choice-copy{display:none}
+.home .scenario-choices a > span.choice-copy-mobile:not(.choice-icon):not(.choice-cta){display:block;grid-column:2;grid-row:2;align-self:start;min-width:0;margin:0;color:#58716d;font-size:13px;line-height:1.3;overflow-wrap:anywhere}
+.home .scenario-choices .choice-cta{display:none}
+.home .scenario-choices a::after{content:'→';grid-column:3;grid-row:1/3;justify-self:center;align-self:center;width:22px;text-align:center;color:#176b58;font-size:20px;line-height:1}
+.home .scenario-choices a:last-child::after{color:#24789d}
+.home .hero{position:relative;min-height:210px;padding:12px 12px 10px;gap:5px;align-content:start;background-size:cover;background-position:center 48%}
+.home .hero-copy{position:relative;z-index:2;grid-column:1;grid-row:1;width:100%;max-width:calc(100% - 142px);min-height:166px}
+.home .hero h1.hero-brand{font-size:42px;line-height:1;margin:0 0 2px}
+.home .hero .hero-tagline{font-size:26px;line-height:1.08;margin:4px 0}
+.home .hero .intro{max-width:none;font-size:14px;line-height:1.3;margin:4px 0 0}
+.home .hero-signpost{position:absolute;z-index:1;top:8px;right:3px;bottom:auto;grid-column:auto;grid-row:auto;width:auto;height:164px;max-width:46%;max-height:none;margin:0;align-self:auto;justify-self:auto;object-fit:contain;object-position:right top;pointer-events:none}
+}
+"""
+
+HOME_STYLE += """
+@media(max-width:700px){
+.home .fact-strip{grid-template-columns:minmax(0,1fr);gap:0;margin:18px 0 5px;padding:6px 14px;border-radius:17px}
+.home .fact-strip>div,.home .fact-strip>div+div{display:grid;grid-template-columns:30px minmax(0,1fr);grid-template-rows:auto auto;column-gap:11px;row-gap:2px;align-items:center;min-width:0;padding:11px 0;border-left:0}
+.home .fact-strip>div+div{border-top:1px solid #d6e9df}
+.home .fact-strip .fact-icon{display:block;grid-column:1;grid-row:1/3;align-self:center;width:26px;height:26px;margin:0;color:#176b5b;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.home .fact-strip strong,.home .fact-strip span{grid-column:2;min-width:0;margin:0}
+.home .fact-strip strong{font-size:14px;line-height:1.25}
+.home .fact-strip span{font-size:12px;line-height:1.35;overflow-wrap:anywhere}
+}
+"""
+
+HOME_STYLE += """
+.home .home-search-heading{display:none}
+@media(max-width:700px){
+.home form.home-search-form{display:block;max-width:none;margin:8px 0 0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
+.home .home-search-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 2px 8px}
+.home .home-search-heading h2{margin:0;font-size:18px;line-height:1.2;font-weight:700}
+.home .home-search-heading a{flex:none;color:#285c55;font-size:12px;line-height:1.2;font-weight:650;text-decoration:none;white-space:nowrap}
+.home form.home-search-form>label{display:none}
+.home form.home-search-form .search{display:grid;grid-template-columns:minmax(0,1fr) 56px;align-items:center;height:60px;min-height:60px;gap:6px;padding:6px 7px 6px 43px;border:1px solid #d7e5df;border-radius:32px;background:#fff;box-shadow:0 2px 9px #244f4209}
+.home form.home-search-form .search-icon{left:15px;width:19px;height:19px;color:#71847f}
+.home form.home-search-form input#profession{height:46px;min-width:0;padding:0 6px;font-size:16px}
+.home form.home-search-form .home-search-button{position:relative;display:grid;place-items:center;justify-self:end;flex:0 0 56px;width:56px;height:44px;min-width:56px;padding:0;border:1px solid #176b5b55;border-left:0;border-radius:14px;background:#c2e1d7;color:transparent;font-size:0;line-height:0;box-shadow:none;transition:background-color .15s ease}
+.home form.home-search-form .home-search-button:hover{background:#c4e2d9}
+.home form.home-search-form .home-search-button:active{background:#b8dbd0}
+.home form.home-search-form .home-search-button::after{content:'→';position:absolute;inset:0;display:grid;place-items:center;color:#145d52;font:700 22px/1 Arial,sans-serif;pointer-events:none}
+}
+"""
 
 VACANCY_LIST_STYLE += """
 .all-jobs-filter{grid-template-columns:minmax(260px,1.55fr) minmax(145px,.7fr) minmax(165px,.82fr) max-content}
@@ -3123,11 +3541,26 @@ def render(query="", county="", job="", params=None, lang="no"):
                 body += '<details class="disclosure"><summary>Andre områder</summary><div class="grid">' + ''.join(region_card(r, query, lang, preserve_lang) for r in areas) + '</div></details>'
         body += data_details(counties + areas)
     else:
-        search = local_nav_url(lang=lang, fragment='profession', include_lang=preserve_lang)
+        search = local_nav_url('jobs', lang, include_lang=preserve_lang)
         explore = local_nav_url('explore', lang, include_lang=preserve_lang)
-        hero = f'''<section class="hero"><div class="hero-copy"><h1 class="hero-brand">Jobb<span>Peil</span></h1><p class="hero-tagline">{tr("home.eyebrow")}</p><p class="intro">{tr("home.hero_intro_short")}</p></div><img class="hero-signpost" src="/static/jobbpeil-signpost.png" alt="{tr("home.signpost_alt")}" fetchpriority="high"><div class="scenario-choices"><a href="{e(search)}"><span class="choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="14" rx="3"/><path d="M8 7V4h8v3M3 12c5 4 13 4 18 0M12 12v4"/></svg></span><strong>{tr("home.choice_search_title")}</strong><span>{tr("home.choice_search_copy")}</span><span class="choice-cta">{tr("home.choice_search_cta")} <i aria-hidden="true">&rarr;</i></span></a><a href="{e(explore)}"><span class="choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16 7-3 7-6 3 3-7Z"/></svg></span><strong>{tr("home.choice_explore_title")}</strong><span>{tr("home.choice_explore_copy")}</span><span class="choice-cta">{tr("home.choice_explore_cta")} <i aria-hidden="true">&rarr;</i></span></a></div></section>'''
+        all_jobs = local_nav_url('jobs', lang, include_lang=preserve_lang)
+        hero = f'''<section class="hero"><div class="hero-copy"><h1 class="hero-brand">Jobb<span>Peil</span></h1><p class="hero-tagline">{tr("home.eyebrow")}</p><p class="intro">{tr("home.hero_intro_short")}</p></div><img class="hero-signpost" src="/static/jobbpeil-signpost.png" alt="{tr("home.signpost_alt")}" fetchpriority="high"><div class="scenario-choices"><a href="{e(search)}"><span class="choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="14" rx="3"/><path d="M8 7V4h8v3M3 12c5 4 13 4 18 0M12 12v4"/></svg></span><strong class="choice-title">{tr("home.choice_search_title")}</strong><strong class="choice-title-mobile">{tr("home.choice_search_cta")}</strong><span class="choice-copy">{tr("home.choice_search_copy")}</span><span class="choice-copy-mobile">Se alle aktuelle stillinger i hele Norge.</span><span class="choice-cta">{tr("home.choice_search_cta")} <i aria-hidden="true">&rarr;</i></span></a><a href="{e(explore)}"><span class="choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16 7-3 7-6 3 3-7Z"/></svg></span><strong class="choice-title">{tr("home.choice_explore_title")}</strong><strong class="choice-title-mobile">{tr("home.choice_explore_cta")}</strong><span class="choice-copy">{tr("home.choice_explore_copy")}</span><span class="choice-copy-mobile">Svar på fem spørsmål og finn jobbretninger som passer for deg.</span><span class="choice-cta">{tr("home.choice_explore_cta")} <i aria-hidden="true">&rarr;</i></span></a></div></section>'''
         form = f'''<form method="get" action="/"><label for="profession">{tr("home.search_label")}</label>{lang_input}<input type="hidden" name="mode" value="jobs"><div class="search"><svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6"/></svg><input id="profession" name="q" data-autocomplete autocomplete="off" placeholder="{tr("home.search_placeholder")}" value="" maxlength="120"><button data-loading-label="{tr("home.searching")}">{tr("home.search_cta")}</button></div></form>'''
-        strip = f'''<div class="fact-strip"><div><strong>{tr("home.fact_region_title")}</strong><span>{tr("home.fact_region_copy")}</span></div><div><strong>{tr("home.fact_people_title")}</strong><span>{tr("home.fact_people_copy")}</span></div><div><strong>{tr("home.fact_data_title")}</strong><span>{tr("home.fact_data_copy")}</span></div></div>'''
+        form = form.replace('<form method="get"', '<form class="home-search-form" method="get"', 1)
+        mobile_placeholder = "Job title or profession" if lang == "en" else "Yrke eller stilling"
+        form = form.replace(
+            f'placeholder="{tr("home.search_placeholder")}"',
+            f'placeholder="{tr("home.search_placeholder")}" data-mobile-placeholder="{mobile_placeholder}"',
+            1,
+        )
+        mobile_search_heading = (
+            f'<div class="home-search-heading"><h2>{"Search for jobs" if lang == "en" else "Søk etter jobb"}</h2>'
+            f'<a href="{e(all_jobs)}">{"See all jobs" if lang == "en" else "Se alle stillinger"} '
+            '<span aria-hidden="true">&rarr;</span></a></div>'
+        )
+        form = form.replace('<label for="profession">', mobile_search_heading + '<label for="profession">', 1)
+        form = form.replace('<button data-loading-label=', '<button class="home-search-button" data-loading-label=', 1)
+        strip = f'''<div class="fact-strip"><div><svg class="fact-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg><strong>{tr("home.fact_region_title")}</strong><span>{tr("home.fact_region_copy")}</span></div><div><svg class="fact-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2Z"/></svg><strong>{tr("home.fact_people_title")}</strong><span>{tr("home.fact_people_copy")}</span></div><div><svg class="fact-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V11M10 20V5M16 20v-8M22 20H2"/></svg><strong>{tr("home.fact_data_title")}</strong><span>{tr("home.fact_data_copy")}</span></div></div>'''
         vakt = local_nav_url('vakt', lang, include_lang=preserve_lang)
         promo = f'<aside class="home-vakt-promo"><span class="home-vakt-robot"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="6" y="10" width="20" height="16" rx="5"/><path d="M16 5v5M12 21c2 1 6 1 8 0M3 16h3m20 0h3"/><circle class="robot-eye" cx="13" cy="17" r=".8"/><circle class="robot-eye" cx="19" cy="17" r=".8"/><circle cx="16" cy="4" r="1"/></svg></span><span class="home-vakt-copy"><span>{tr("vakt.badge")}</span><strong>{tr("vakt.title")} &middot; {tr("vakt.promo_copy")}</strong></span><a class="button" href="{e(vakt)}">{tr("vakt.try")} &rarr;</a></aside>'
         header = site_header('', params, lang, homepage=True).replace('</header>', promo + '</header>', 1)
